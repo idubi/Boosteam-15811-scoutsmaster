@@ -1,0 +1,5 @@
+{
+  "name": "ScoutMaster_offline",
+  "description": "now last version is offline version - applcication need to allow to work and update backend at offline mode ",
+  "requestFramePermissions": []
+}
