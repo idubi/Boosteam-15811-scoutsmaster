@@ -6,6 +6,8 @@ import AutoBinding from './components/auto/AutoBinding';
 import TeleOpBinding from './components/teleop/TeleOpBinding';
 import SummaryBinding from './components/summary/SummaryBinding';
 import AdminBinding from './components/admin/AdminBinding';
+import { useOfflineSync } from './hooks/useOfflineSync';
+import { addToOfflineQueue, getOfflineQueue } from './lib/offlineSync';
 import { Layout } from './components/Layout';
 import { AppTranslation_EN, AppTranslation_HE, AuthTranslation_EN, AuthTranslation_HE } from './components/translations';
 import { calculateTeamGrade } from './lib/gradingEngine';
@@ -68,6 +70,10 @@ const App: React.FC = () => {
   const [phase, setPhase] = useState<ScoutingPhase>(ScoutingPhase.AUTH);
   console.log("App: Rendering phase", phase);
   const [language, setLanguage] = useState<Language>(Language.HE);
+  
+  // Custom background offline sync
+  const { pendingCount, isSyncing: isOfflineSyncing } = useOfflineSync(language);
+
   const [user, setUser] = useState<User | null>(null);
   const [autoData, setAutoData] = useState<AutoData | null>(null);
   const [teleopData, setTeleopData] = useState<TeleOpData | null>(null);
@@ -771,16 +777,24 @@ const App: React.FC = () => {
     const payload = { ...data, sheetName: SHEET_NAME, headers: ALL_HEADERS };
 
     try {
-      await fetch('/api/sync', {
+      const response = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      if (!response.ok) {
+        throw new Error('Database sync failed on server');
+      }
       setSyncStatus('success');
       setTimeout(() => setSyncStatus('idle'), 3000);
     } catch (error) {
-      console.error('Sync error:', error);
+      console.error('Sync error, queueing offline:', error);
+      addToOfflineQueue(data);
       setSyncStatus('error');
+      alert(language === Language.HE 
+        ? 'אין חיבור לרשת. הנתונים נשמרו מקומית במכשיר ויסונכרנו אוטומטית כשהחיבור יחזור.'
+        : 'Network disconnected. Data saved locally and will auto-sync once internet is restored.'
+      );
     }
   };
 
@@ -3034,7 +3048,55 @@ const App: React.FC = () => {
         onLogoClick={() => setPhase(ScoutingPhase.AUTH)}
       >
         <div className="max-w-4xl mx-auto px-2 py-4 sm:px-4 sm:py-6" dir={language === Language.HE ? 'rtl' : 'ltr'}>
-          <div className="bg-white rounded-3xl shadow-2xl p-6">
+          {pendingCount > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 bg-amber-50 border-2 border-amber-900 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between text-amber-900 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4"
+            >
+              <div className="flex items-center gap-3">
+                <AlertCircle className="text-amber-700 shrink-0 animate-bounce" size={24} />
+                <div className="flex flex-col">
+                  <span className="font-extrabold text-sm uppercase tracking-wider">
+                    {language === Language.HE ? 'סנכרון מקומי פעיל' : 'Offline Mode Active'}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-700">
+                    {language === Language.HE 
+                      ? `ישנם ${pendingCount} משחקים במאגר המקומי. הם יסונכרנו אוטומטית כשהחיבור לאינטרנט יחזור.`
+                      : `There are ${pendingCount} matches saved locally. They will sync automatically when your internet connection is restored.`}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                <button 
+                  onClick={() => {
+                    const queue = getOfflineQueue();
+                    const jsonString = JSON.stringify(queue, null, 2);
+                    const blob = new Blob([jsonString], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = `scout_offline_export_${Date.now()}.json`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="bg-amber-900 hover:bg-amber-800 text-white font-extrabold px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer whitespace-nowrap shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  {language === Language.HE ? 'ייצוא קובץ JSON' : 'Export JSON file'}
+                </button>
+                {isOfflineSyncing && (
+                  <span className="shrink-0 text-xs bg-amber-900 text-white font-black uppercase px-3 py-1.5 rounded-xl flex items-center gap-2">
+                    <RefreshCw size={12} className="animate-spin" />
+                    {language === Language.HE ? 'מסנכרן...' : 'Syncing...'}
+                  </span>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          <div className="bg-white rounded-3xl shadow-2xl p-6 border-2 border-slate-900">
             {renderPhase()}
           </div>
         </div>

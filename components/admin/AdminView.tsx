@@ -13,7 +13,7 @@ import {
   Legend, 
   ResponsiveContainer 
 } from 'recharts';
-import { Search, Table as TableIcon, BarChart3, LineChart as LineChartIcon, ArrowLeft, ChevronDown, Check, X, Trophy, RefreshCw, ScrollText, History, AlertCircle, Clock, LayoutGrid, Database, Sliders, HelpCircle } from 'lucide-react';
+import { Search, Table as TableIcon, BarChart3, LineChart as LineChartIcon, ArrowLeft, ChevronDown, Check, X, Trophy, RefreshCw, ScrollText, History, AlertCircle, Clock, LayoutGrid, Database, Sliders, HelpCircle, Upload, FileText, QrCode, Trash2 } from 'lucide-react';
 import { Language, SpreadsheetRow, TeamAggregatedData, ProcessLog } from '../../types';
 import { AdminTranslation_EN, AdminTranslation_HE } from '../translations';
 import { calculateTeamGrade } from '../../lib/gradingEngine';
@@ -121,11 +121,27 @@ const AdminView: React.FC<AdminViewProps> = ({
   onUpdateSettings,
   onFetchGrades
 }) => {
-  const [activeTab, setActiveTab] = useState<'investigation' | 'compare' | 'game'>('investigation');
+  const [activeTab, setActiveTab] = useState<'investigation' | 'compare' | 'game' | 'offline'>('investigation');
   const [compareSubTab, setCompareSubTab] = useState<'ranking' | 'performance'>('ranking');
   const [selectedMatch, setSelectedMatch] = useState<string>('');
   const [isMatchDropdownOpen, setIsMatchDropdownOpen] = useState(false);
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
+
+  // Custom Offline Ingestion States
+  const [deviceQueue, setDeviceQueue] = useState<any[]>([]);
+  const [uploadedRecords, setUploadedRecords] = useState<any[]>([]);
+  const [parseStatus, setParseStatus] = useState<{ success: boolean; message: string; rows?: any[] } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, success: 0, fail: 0 });
+
+  useEffect(() => {
+    try {
+      const queue = JSON.parse(localStorage.getItem('scoutmaster_offline_queue') || '[]');
+      setDeviceQueue(queue);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [activeTab]);
 
   // Dynamic config states
   const [dbWeights, setDbWeights] = useState({
@@ -262,6 +278,122 @@ const AdminView: React.FC<AdminViewProps> = ({
   useEffect(() => {
     runSimulation();
   }, [teamsGrades, sliderWeights]);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const rawText = event.target?.result as string;
+        const parsed = JSON.parse(rawText);
+
+        const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+        const validRows = rows.filter((row: any) => {
+          return row && typeof row === 'object' && row.sessionId && row.recordType;
+        });
+
+        if (validRows.length === 0) {
+          setParseStatus({
+            success: false,
+            message: isRTL 
+              ? 'הקובץ אינו מכיל רשומות סקאוטינג תקינות (נדרשים sessionId ו-recordType).' 
+              : 'The file does not contain valid scouting records (sessionId and recordType are required).'
+          });
+          setUploadedRecords([]);
+        } else {
+          setParseStatus({
+            success: true,
+            message: isRTL 
+              ? `נקראו ${validRows.length} רשומות סקאוטינג תקינות מהקובץ!` 
+              : `Successfully read ${validRows.length} valid scouting records from the file!`,
+            rows: validRows
+          });
+          setUploadedRecords(validRows);
+        }
+      } catch (err) {
+        console.error(err);
+        setParseStatus({
+          success: false,
+          message: isRTL ? 'שגיאה בפענוח קובץ ה-JSON. נא לוודא שהקובץ תקין.' : 'Error parsing JSON file. Please ensure the file is valid JSON.'
+        });
+        setUploadedRecords([]);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleIngestRecords = async (recordsToIngest: any[], isDeviceQueue = false) => {
+    if (recordsToIngest.length === 0 || uploading) return;
+
+    setUploading(true);
+    setUploadProgress({ current: 0, total: recordsToIngest.length, success: 0, fail: 0 });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < recordsToIngest.length; i++) {
+      const record = recordsToIngest[i];
+      setUploadProgress(prev => ({ ...prev, current: i + 1 }));
+
+      try {
+        const payload = { ...record, sheetName: 'scoutsmaster_ongoing' };
+        const resp = await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (resp.ok) {
+          successCount++;
+        } else {
+          console.error(`Ingestion failed for session ${record.sessionId}`);
+          failCount++;
+        }
+      } catch (err) {
+        console.error(`Ingestion failed for session ${record.sessionId}:`, err);
+        failCount++;
+      }
+
+      setUploadProgress(prev => ({ ...prev, success: successCount, fail: failCount }));
+    }
+
+    setUploading(false);
+
+    if (successCount > 0) {
+      if (isDeviceQueue) {
+        const currentQueue = JSON.parse(localStorage.getItem('scoutmaster_offline_queue') || '[]');
+        const remainingQueue = currentQueue.filter((q: any) => {
+          const wasIngested = recordsToIngest.some(rec => rec.sessionId === q.sessionId);
+          return !wasIngested;
+        });
+        localStorage.setItem('scoutmaster_offline_queue', JSON.stringify(remainingQueue));
+        setDeviceQueue(remainingQueue);
+      } else {
+        setUploadedRecords([]);
+        setParseStatus(null);
+      }
+
+      if (onRecalculate) {
+        await onRecalculate();
+      }
+      if (onFetchGrades) {
+        onFetchGrades();
+      }
+
+      alert(isRTL 
+        ? `סנכרון תור הסתיים בהצלחה! ${successCount} רשומות סונכרנו ועודכנו במסד הנתונים Supabase. הגרפים והציונים חושבו מחדש!` 
+        : `Ingestion complete! ${successCount} records successfully synchronized down to Supabase. Analytics and ratios recalculated!`
+      );
+    } else {
+      alert(isRTL 
+        ? 'כזל! לא הצלחנו לסנכרן אף רשומה. אנא בדוק את החיבור לרשת.' 
+        : 'Ingestion failed! Could not sync records. Please check host internet or structure.'
+      );
+    }
+  };
 
   const handleSaveWeights = async () => {
     setIsSavingWeights(true);
@@ -936,6 +1068,12 @@ const AdminView: React.FC<AdminViewProps> = ({
                 className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === 'game' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}
               >
                 {t.gameView}
+              </button>
+              <button 
+                onClick={() => setActiveTab('offline')}
+                className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === 'offline' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}
+              >
+                {isRTL ? 'סנכרון ויבוא מקומי' : 'Offline Ingestion'}
               </button>
             </div>
           </div>
@@ -1978,6 +2116,203 @@ const AdminView: React.FC<AdminViewProps> = ({
                     })()}
                   </>
                 )}
+              </div>
+            )}
+
+            {activeTab === 'offline' && (
+              <div className="p-4 sm:p-8 min-h-[400px] space-y-8 animate-in fade-in duration-300">
+                {/* Header Block */}
+                <div className="bg-slate-900 text-white rounded-3xl p-6 border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Database className="text-amber-400" size={28} />
+                    <h2 className="text-xl font-black uppercase tracking-wider">
+                      {isRTL ? 'ניהול סנכרון ויבוא נתונים מקומיים' : 'Offline Ingestion & Synchronization'}
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed font-semibold">
+                    {isRTL 
+                      ? 'ממשק זה מאפשר למנהלי המערכת (Lead Scouters) לקלוט נתוני סקאוטינג שנאספו במצב לא מקוון. תוכל לסנכרן דוחות השמורים במכשיר זה או להעלות קובצי ייצוא של סוקרים אחרים.'
+                      : 'This interface enables Lead Scouters to ingest and authorize scouting data collected offline. You can force-sync local records from this browser or upload offline JSON exports from other devices.'
+                    }
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* Left Column: Local browser device queue */}
+                  <div className="bg-white border-2 border-slate-900 rounded-[2rem] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col justify-between">
+                    <div>
+                      <div className="border-b-2 border-slate-100 pb-3 mb-4 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Clock className="text-amber-500" size={20} />
+                          <h3 className="text-base font-black text-slate-900">
+                            {isRTL ? 'סטטוס מכשיר נוכחי' : 'Current Device Pending Queue'}
+                          </h3>
+                        </div>
+                        <span className="bg-amber-100 text-amber-900 px-3 py-1 rounded-full text-xs font-extrabold uppercase font-mono">
+                          {deviceQueue.length} {isRTL ? 'ממתינים' : 'Pending'}
+                        </span>
+                      </div>
+
+                      {deviceQueue.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-slate-400 gap-2">
+                          <Check className="text-emerald-500" size={32} />
+                          <p className="text-xs font-bold text-center">
+                            {isRTL ? 'כל הנתונים במכשיר זה מסונכרנים בהצלחה!' : 'All data on this device is fully synchronized!'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 mb-4">
+                          {deviceQueue.map((item, index) => (
+                            <div key={item.sessionId || index} className="text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 flex justify-between items-center font-mono">
+                              <div>
+                                <span className="font-bold text-slate-900">{isRTL ? 'קבוצה' : 'Team'} {item.teamScouted}</span>
+                                <span className="text-slate-400 mx-2">|</span>
+                                <span>{isRTL ? 'משחק' : 'Match'} #{item.matchNumber}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 truncate max-w-[120px]">{item.name || 'Anonymous'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {deviceQueue.length > 0 && (
+                      <div className="flex gap-3 pt-4 border-t border-slate-100">
+                        <button
+                          onClick={() => handleIngestRecords(deviceQueue, true)}
+                          disabled={uploading}
+                          className="flex-grow bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-black uppercase text-xs tracking-wider py-3 px-4 rounded-xl cursor-pointer transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-2"
+                        >
+                          <RefreshCw size={14} className={uploading ? "animate-spin" : ""} />
+                          {isRTL ? 'סנכרן תור מקומי כעת' : 'Force-Sync Live Device Data'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(isRTL ? 'האם אתה בטוח שברצונך למחוק לצמיתות את כל הרשומות המקומיות?' : 'Are you sure you want to permanently clear the local offline queue?')) {
+                              localStorage.removeItem('scoutmaster_offline_queue');
+                              setDeviceQueue([]);
+                            }
+                          }}
+                          disabled={uploading}
+                          className="bg-rose-500 border-2 border-slate-900 text-white hover:bg-rose-600 font-extrabold px-3 rounded-xl cursor-pointer transition-colors"
+                          title={isRTL ? 'רוקן תור' : 'Clear Queue'}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Column: Ingest JSON File or QR Payload */}
+                  <div className="bg-white border-2 border-slate-900 rounded-[2rem] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                    <div className="border-b-2 border-slate-100 pb-3 mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Upload className="text-indigo-600" size={20} />
+                        <h3 className="text-base font-black text-slate-900">
+                          {isRTL ? 'קליטת קובץ חיצוני או הדבקת סריקה' : 'External Import & QR Paste'}
+                        </h3>
+                      </div>
+                    </div>
+
+                    {uploading ? (
+                      <div className="py-8 space-y-4 text-center">
+                        <RefreshCw size={40} className="mx-auto text-indigo-600 animate-spin" />
+                        <div className="text-slate-900 font-black uppercase text-sm tracking-wider">
+                          {isRTL ? 'מייבא נתונים...' : 'Ingesting offline records...'}
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-3 max-w-xs mx-auto overflow-hidden border border-slate-900">
+                          <div 
+                            className="bg-indigo-600 h-full transition-all duration-300"
+                            style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                          />
+                        </div>
+                        <div className="text-[11px] font-bold text-slate-500 font-mono">
+                          {isRTL ? 'רשומה' : 'Record'} {uploadProgress.current} {isRTL ? 'מתוך' : 'of'} {uploadProgress.total} <br/>
+                          ({isRTL ? 'הצליחו:' : 'Success:'} {uploadProgress.success} | {isRTL ? 'נכשלו:' : 'Failed:'} {uploadProgress.fail})
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        {/* File Upload Zone */}
+                        <div className="border-2 border-dashed border-slate-300 hover:border-indigo-500 transition-colors rounded-2xl p-6 text-center relative cursor-pointer bg-slate-50">
+                          <input 
+                            type="file" 
+                            accept=".json"
+                            onChange={handleFileSelect}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <Upload className="mx-auto text-slate-400 mb-2" size={32} />
+                          <span className="font-bold text-slate-800 text-xs block mb-1">
+                            {isRTL ? 'גרור לכאן קובץ JSON או לחץ לבחירה' : 'Drag & drop JSON file or click to browse'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-semibold block">
+                            {isRTL ? 'תומך בקובצי ייצוא של סוקרים אחרים (.json)' : 'Supports exported team scout files (.json)'}
+                          </span>
+                        </div>
+
+                        {/* Textbox fallback (for scanning QR code directly) */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-black text-slate-700 block uppercase">
+                            {isRTL ? 'ייבוא ישיר מהדבקת סריקת קוד QR' : 'Paste QR Code Scanned Text'}
+                          </label>
+                          <textarea
+                            placeholder={isRTL ? 'הדבק כאן את הטקסט שנסרק מקוד ה-QR...' : 'Paste Scanned QR code raw JSON payload here...'}
+                            rows={2}
+                            className="w-full text-xs font-mono p-3 border-2 border-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 placeholder:text-slate-400"
+                            id="qr-paste-input"
+                          />
+                          <button
+                            onClick={() => {
+                              const textarea = document.getElementById('qr-paste-input') as HTMLTextAreaElement | null;
+                              const val = textarea?.value?.trim();
+                              if (!val) {
+                                alert(isRTL ? 'נא להדביק טקסט כלשהו תחילה!' : 'Please paste text first!');
+                                return;
+                              }
+                              try {
+                                const parsed = JSON.parse(val);
+                                const rows = Array.isArray(parsed) ? parsed : [parsed];
+                                const valid = rows.filter((r: any) => r && r.sessionId);
+                                if (valid.length === 0) {
+                                  alert(isRTL ? 'לא נמצאו נתוני סקאוטינג תקינים בטקסט.' : 'No valid scout data found.');
+                                } else {
+                                  handleIngestRecords(valid, false);
+                                  if (textarea) textarea.value = '';
+                                }
+                              } catch (e) {
+                                alert(isRTL ? 'פענוח הטקסט נכשל. ודא שהקוד מכיל קובץ JSON תקין.' : 'Parsing text failed. Ensure text matches JSON formatting.');
+                              }
+                            }}
+                            className="w-full cursor-pointer bg-slate-100 border-2 border-slate-900 hover:bg-slate-200 text-slate-800 font-extrabold text-xs py-2 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                          >
+                            <QrCode size={14} />
+                            {isRTL ? 'קלוט הדבקת QR' : 'Ingest QR Code Payload'}
+                          </button>
+                        </div>
+
+                        {parseStatus && (
+                          <div className={`text-xs p-4 rounded-2xl border-2 font-semibold ${
+                            parseStatus.success ? 'bg-emerald-50 border-emerald-500 text-emerald-900' : 'bg-rose-50 border-rose-500 text-rose-900'
+                          }`}>
+                            <div className="flex gap-2">
+                              {parseStatus.success ? <Check size={16} /> : <AlertCircle size={16} />}
+                              <span>{parseStatus.message}</span>
+                            </div>
+
+                            {parseStatus.success && uploadedRecords.length > 0 && (
+                              <button
+                                onClick={() => handleIngestRecords(uploadedRecords, false)}
+                                className="mt-3 w-full bg-slate-900 hover:bg-slate-800 text-white font-black uppercase text-[10px] tracking-wider py-2.5 rounded-xl cursor-pointer transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                              >
+                                {isRTL ? 'ייבא את הרשומות שהועלו כעת' : 'Ingest Loaded File'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
       </div>

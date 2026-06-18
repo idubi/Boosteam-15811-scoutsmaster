@@ -40,3 +40,26 @@ The application uses local storage to maintain session persistence.
 - `system_settings`: Application configuration.
 - `teams_grades`: Aggregated team performance scores.
 - `auth_config`: User authorization and role mapping (REPLACING 'AUTH' excel sheet).
+
+---
+
+## 📡 Hybrid Offline Sync & Ingestion System
+
+The application features a robust offline mechanism that ensures no scouting data is lost during cellular dropouts or stadium Wi-Fi congestion.
+
+### 1. Offline Storage
+- **Key**: `scoutmaster_offline_queue`
+- **Behavior**: If a match report submission fails due to network outage, the data is automatically enqueued locally in `localStorage` as a complete `SpreadsheetRow` payload.
+
+### 2. Auto Background Sync
+- Activated by a top-level React hook (`useOfflineSync`).
+- Listens for the browser's `'online'` event to immediately flush queued records to Supabase.
+- Alternates on a 15-second timer to resolve silent reconnection states.
+- Ensures item-by-item safety; successfully uploaded records are popped from the queue, while failing ones remain intact.
+
+### 3. Failsafe Manual Ingestion (Admin Panel)
+For critical environments, Lead Scouters can bypass automatic triggers:
+- **Export**: Scouters can export their local pending queue into a `.json` backup file right from the main status banner.
+- **Import**: Admins can import `.json` files via the **Offline Ingestion** tab in the Admin Panel.
+- **QR Code Paste**: Direct copy-paste area for scanned QR data payloads.
+- **Idempotency**: All uploads use a PostgreSQL-enforced `upsert` strategy bound to the unique `sessionId` constraint, ensuring no data duplication regardless of sync frequency.

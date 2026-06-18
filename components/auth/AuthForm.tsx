@@ -43,6 +43,20 @@ const AuthForm: React.FC<AuthFormProps> = (props) => {
         <p className={`text-slate-400 font-semibold ${isRTL ? 'text-base' : 'text-sm'}`}>{t.subtitle}</p>
       </div>
 
+      {!navigator.onLine && (
+        <div className="mb-6 p-4 bg-amber-50 border-2 border-amber-900 rounded-2xl flex flex-col gap-1 text-center items-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-amber-900 animate-in fade-in duration-300">
+          <span className="font-extrabold text-xs uppercase tracking-wider flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" />
+            {isRTL ? 'מצב לא מקוון פעיל' : 'Offline Mode Active'}
+          </span>
+          <p className="text-[10px] font-semibold mt-1 text-slate-800 leading-normal" dir={isRTL ? 'rtl' : 'ltr'}>
+            {isRTL 
+              ? 'חיבור הרשת אינו זמין. באפשרותך להיכנס כצופה ללא סיסמה. כניסת מנהל תתאפשר רק במידה ופרטיו אומתו בעבר במכשיר זה.' 
+              : 'Network offline. You may log in as a Viewer without credentials. Admin login requires previously verified credentials on this device.'}
+          </p>
+        </div>
+      )}
+
       {props.error && !props.isUpdateMode && (
         <div className={`mb-6 p-4 ${props.isRestrictionError ? 'bg-red-600' : 'bg-red-50'} border ${props.isRestrictionError ? 'border-red-700' : 'border-red-200'} rounded-2xl flex flex-col gap-4 text-center items-center`} dir="ltr">
           <div className="flex flex-row items-center gap-3">

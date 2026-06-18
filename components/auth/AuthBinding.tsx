@@ -60,7 +60,54 @@ const AuthBinding: React.FC<AuthBindingProps> = ({
     setAuthLoading(true);
     setError(null);
 
-    if (!activeName || !activePass) {
+    const lastUser = localStorage.getItem('scoutmaster_last_verified_user');
+    const lastPass = localStorage.getItem('scoutmaster_last_verified_pass');
+    const lastRole = localStorage.getItem('scoutmaster_last_verified_role');
+
+    const performOfflineLogin = () => {
+      // 1. Rely on previous successful check if there was one matching the entered details
+      if (
+        lastUser && lastPass && lastRole &&
+        activeName.trim().toLowerCase() === lastUser.trim().toLowerCase() &&
+        activePass === lastPass
+      ) {
+        setAuthenticatedRole(lastRole);
+        localStorage.setItem('scoutmaster_saved_user', activeName);
+        localStorage.setItem('scoutmaster_saved_pass', activePass);
+        
+        if (lastRole === 'admin') setRole('admin');
+        else if (lastRole === 'scouter') setRole('scouter');
+        setError(null);
+        setAuthLoading(false);
+        return true;
+      }
+
+      // 2. Viewer (צופה) only login option is permitted - without checking credentials
+      if (role === 'scouter') {
+        setAuthenticatedRole('scouter');
+        localStorage.setItem('scoutmaster_saved_user', activeName);
+        localStorage.setItem('scoutmaster_saved_pass', activePass || '');
+        setRole('scouter');
+        
+        alert(language === Language.HE 
+          ? 'אין חיבור לרשת. כניסה מאושרת כצופה במצב לא מקוון ללא בדיקת פרטים.' 
+          : 'No connection to network. Access granted as Viewer (offline) without verification.'
+        );
+        setError(null);
+        setAuthLoading(false);
+        return true;
+      }
+
+      return false;
+    };
+
+    if (!navigator.onLine) {
+      if (performOfflineLogin()) {
+        return;
+      }
+    }
+
+    if (!activeName || (!activePass && role !== 'scouter')) {
       setAuthLoading(false);
       return;
     }
@@ -78,16 +125,28 @@ const AuthBinding: React.FC<AuthBindingProps> = ({
         localStorage.setItem('scoutmaster_saved_user', activeName);
         localStorage.setItem('scoutmaster_saved_pass', activePass);
         
+        // Cache this successful verification for future offline checks
+        localStorage.setItem('scoutmaster_last_verified_user', activeName);
+        localStorage.setItem('scoutmaster_last_verified_pass', activePass);
+        localStorage.setItem('scoutmaster_last_verified_role', roleStr);
+        
         if (roleStr === 'admin') setRole('admin');
         else if (roleStr === 'scouter') setRole('scouter');
       } else {
         setAuthenticatedRole(null);
         localStorage.removeItem('scoutmaster_saved_user');
         localStorage.removeItem('scoutmaster_saved_pass');
-        setError('Invalid credentials');
+        setError(language === Language.HE ? 'פרטי ההתחברות אינם תקינים' : 'Invalid credentials');
       }
     } catch (err: any) {
-      setError(err.message);
+      console.warn('Connection failed, attempting offline check...', err);
+      if (performOfflineLogin()) {
+        return;
+      }
+      setError(language === Language.HE 
+        ? 'אין חיבור לרשת וכניסה במצב זה נכשלה.' 
+        : 'No network connection, and offline authorization failed.'
+      );
       setAuthenticatedRole(null);
     } finally {
       setAuthLoading(false);
