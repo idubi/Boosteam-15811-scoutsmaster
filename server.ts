@@ -1,8 +1,11 @@
 import express from "express";
+import dotenv from "dotenv";
+dotenv.config();
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
 import fetch from "node-fetch";
 import path from "path";
+import { GoogleGenAI } from "@google/genai";
 import { calculateTeamGrade, GRADING_WEIGHTS, updateGradingWeights } from "./lib/gradingEngine.ts";
 import type { TeamAggregatedData } from "./types.ts";
 import {ENV}  from "./constants.ts";
@@ -734,6 +737,67 @@ async function startServer() {
     } catch (err: any) {
       console.error("Failed to save weights and recalculate:", err);
       res.status(500).json({ error: err.message || "Failed to update weights" });
+    }
+  });
+
+  app.post("/api/analyze-match", async (req, res) => {
+    try {
+      const { auto, teleop, language } = req.body;
+      if (!auto || !teleop) {
+        return res.status(400).json({ error: "auto and teleop data are required" });
+      }
+
+      const rawKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+      const apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
+
+      const isKeyInvalid = !apiKey || 
+        apiKey === "undefined" || 
+        apiKey === "null" || 
+        apiKey.toLowerCase().includes("your_") || 
+        apiKey.toLowerCase().includes("placeholder") ||
+        apiKey.length < 15;
+
+      if (isKeyInvalid) {
+        console.error("[Gemini] API Key missing, placeholder, or invalid in environment:", apiKey);
+        return res.status(400).json({ 
+          error: language === "he"
+            ? "מפתח ה-API של Gemini אינו מוגדר או אינו תקין. אנא הגדר מפתח תקין בהגדרות המערכת (Settings > Secrets) תחת השם GEMINI_API_KEY."
+            : "Gemini API key is missing or invalid. Please configure a valid GEMINI_API_KEY in the Settings > Secrets menu."
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const teamNum = auto.teamScouted || auto.teamNumber || "Unknown";
+      const matchNum = auto.matchNumber || "Unknown";
+
+      const promptText = language === "he" || language === "HE"
+        ? `הערך את ביצועי קבוצה ${teamNum} במשחק ${matchNum}. 
+           נתוני אוטונומי: ${JSON.stringify(auto)}. 
+           נתוני טלאופ: ${JSON.stringify(teleop)}. 
+           ספק סיכום סקאוטינג קצר וקולע עבור מאמן הנהיגה שלנו. השב בעברית בלבד.`
+        : `Evaluate Team ${teamNum} Match ${matchNum}: 
+           Auto Data: ${JSON.stringify(auto)}, 
+           TeleOp Data: ${JSON.stringify(teleop)}. 
+           Provide a punchy scouting summary for our drive coach. Respond in English only.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: promptText
+      });
+
+      const resultText = response.text || (language === "he" || language === "HE" ? "נותח." : "Analyzed.");
+      res.json({ success: true, text: resultText });
+    } catch (err: any) {
+      console.error("[Gemini API Error] Failed to generate content:", err);
+      res.status(500).json({ error: err.message || "Failed to generate AI analysis" });
     }
   });
 

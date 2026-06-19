@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { AutoData, TeleOpData, User, SpreadsheetRow, Language } from '../../types';
 import SummaryView from './SummaryView';
-import { GoogleGenAI } from "@google/genai";
 
 interface SummaryBindingProps {
   auto: AutoData;
@@ -26,27 +25,25 @@ const SummaryBinding: React.FC<SummaryBindingProps> = ({ auto, teleop, user, tar
   const generateAi = async () => {
     setIsAnalyzing(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      const promptText = language === Language.HE 
-        ? `הערך את ביצועי קבוצה ${auto.teamScouted} במשחק ${auto.matchNumber}. 
-           נתוני אוטונומי: ${JSON.stringify(auto)}. 
-           נתוני טלאופ: ${JSON.stringify(teleop)}. 
-           ספק סיכום סקאוטינג קצר וקולע עבור מאמן הנהיגה שלנו. השב בעברית בלבד.`
-        : `Evaluate Team ${auto.teamScouted} Match ${auto.matchNumber}: 
-           Auto Data: ${JSON.stringify(auto)}, 
-           TeleOp Data: ${JSON.stringify(teleop)}. 
-           Provide a punchy scouting summary for our drive coach. Respond in English only.`;
-
-      const response = await ai.models.generateContent({ 
-        model: 'gemini-3-pro-preview', 
-        contents: promptText 
+      const response = await fetch('/api/analyze-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto, teleop, language })
       });
-      
-      setAiAnalysis(response.text || (language === Language.HE ? "נותח." : "Analyzed."));
-    } catch (e) {
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Server error generating analysis');
+      }
+
+      const data = await response.json();
+      setAiAnalysis(data.text || (language === Language.HE ? "נותח." : "Analyzed."));
+    } catch (e: any) {
       console.error(e);
-      setAiAnalysis(language === Language.HE ? "שירות ה-AI אינו זמין כרגע." : "AI logic currently unavailable.");
+      setAiAnalysis(language === Language.HE 
+        ? `שירות ה-AI אינו זמין כרגע: ${e.message || ''}` 
+        : `AI logic currently unavailable: ${e.message || ''}`
+      );
     } finally { setIsAnalyzing(false); }
   };
 
