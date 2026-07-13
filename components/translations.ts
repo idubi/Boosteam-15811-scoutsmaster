@@ -39,7 +39,8 @@ export const AuthTranslation_EN = {
   updateBegin: "Update Session",
   cancelAndReturn: "Cancel & Return",
   deleteGame: "Delete Game",
-  logout: "Sign Out"
+  logout: "Sign Out",
+  tryAgain: "Try Again"
 };
 
 export const AuthTranslation_HE = {
@@ -67,7 +68,8 @@ export const AuthTranslation_HE = {
   updateBegin: "עדכון משחק",
   cancelAndReturn: "ביטול וחזרה",
   deleteGame: "מחיקת משחק",
-  logout: "התנתק"
+  logout: "התנתק",
+  tryAgain: "נסה שוב"
 };
 
 export const AutoTranslation_EN = {

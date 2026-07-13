@@ -244,6 +244,7 @@ const AuthBinding: React.FC<AuthBindingProps> = ({
       authLoading={authLoading}
       onDeleteGame={onDeleteGame}
       onUpdateMetadata={onUpdateMetadata}
+      onClearError={() => setError(null)}
       error={displayError}
       isUpdateMode={isUpdateMode}
       isRestrictionError={isRestrictionError}
